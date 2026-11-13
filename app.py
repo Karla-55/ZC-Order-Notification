@@ -74,10 +74,8 @@ if uploaded_file:
         else:
             st.warning("未找到「Email」列，跳过Email筛选")
 
-        st.info("总订单/快递/LTL：不执行收货地址筛选")
-
-        # ========== OSA&NORA 专用过滤 ==========
-        st.info("OSA&NORA：不筛选运营组、不筛选Email；删除收货地址含LOWE/C/O的订单，再按仓库匹配")
+        # ========== OSA&NORA 专用过滤 + 统计 ==========
+        osa_addr_removed = 0  # 记录因地址含LOWE/C/O被删除的数量
 
         # 生成Excel文件到内存
         output = BytesIO()
@@ -111,25 +109,26 @@ if uploaded_file:
             if "仓库编号" in df_base.columns:
                 df_osa_temp = df_base.copy()
 
-                # 第一步：删除收货地址包含 LOWE / C/O 的订单
-                if "ShiptoAddress" in df_osa_temp.columns:
-                    addr_clean = df_osa_temp["ShiptoAddress"].astype(str).str.replace(r'\s+', '', regex=True).str.lower()
-                    addr_invalid = addr_clean.str.contains('|'.join(ADDR_EXCLUDE_KEYWORDS), na=False)
-                    df_osa_temp = df_osa_temp[~addr_invalid].reset_index(drop=True)
-
-                # 第二步：仓库编号筛选（包含NORA/OSA，排除ROSA）
-                wh_clean = df_osa_temp["仓库编号"].apply(clean_text)
-                
-                keep_mask = pd.Series(False, index=df_osa_temp.index)
+                # 第一步：先按仓库筛选，得到OSA&NORA范围的原始数据
+                wh_clean_all = df_osa_temp["仓库编号"].apply(clean_text)
+                keep_mask_all = pd.Series(False, index=df_osa_temp.index)
                 for kw in WH_INCLUDE:
-                    keep_mask = keep_mask | wh_clean.str.contains(kw, na=False)
-                
-                remove_mask = pd.Series(False, index=df_osa_temp.index)
+                    keep_mask_all = keep_mask_all | wh_clean_all.str.contains(kw, na=False)
+                remove_mask_all = pd.Series(False, index=df_osa_temp.index)
                 for kw in WH_EXCLUDE:
-                    remove_mask = remove_mask | wh_clean.str.contains(kw, na=False)
-                
-                final_mask = keep_mask & ~remove_mask
-                df_osa = df_osa_temp[final_mask].reset_index(drop=True)
+                    remove_mask_all = remove_mask_all | wh_clean_all.str.contains(kw, na=False)
+                wh_final_mask = keep_mask_all & ~remove_mask_all
+                df_osa_wh_only = df_osa_temp[wh_final_mask].reset_index(drop=True)
+
+                # 第二步：在OSA&NORA范围内，删除地址含LOWE/C/O的订单，并统计数量
+                if "ShiptoAddress" in df_osa_wh_only.columns:
+                    addr_clean = df_osa_wh_only["ShiptoAddress"].astype(str).str.replace(r'\s+', '', regex=True).str.lower()
+                    addr_invalid = addr_clean.str.contains('|'.join(ADDR_EXCLUDE_KEYWORDS), na=False)
+                    osa_addr_removed = int(addr_invalid.sum())
+                    df_osa = df_osa_wh_only[~addr_invalid].reset_index(drop=True)
+                else:
+                    df_osa = df_osa_wh_only.copy()
+
                 df_osa.to_excel(writer, sheet_name="OSA&NORA", index=False)
             else:
                 st.warning("未找到「仓库编号」列，跳过仓库筛选")
@@ -151,6 +150,9 @@ if uploaded_file:
         col2.metric("Fedex&UPS", len(df_exp))
         col3.metric("LTL", len(df_ltl))
         col4.metric("OSA&NORA", len(df_osa))
+
+        # 专门标注地址删除数量
+        st.info(f"📌 OSA&NORA 范围内，收货地址包含 LOWE / C/O 并已删除的订单：**{osa_addr_removed}** 条")
 
         # 调试面板：仓库编号匹配详情
         if "仓库编号" in df_base.columns:
