@@ -8,7 +8,8 @@ st.set_page_config(page_title="订单数据整理工具", layout="wide")
 st.title("订单数据自动整理工具")
 
 # ========== 规则配置 ==========
-COLS_TO_DELETE = ["数据唯一编号列", "备注2"]
+# 需要删除的列（所有Sheet统一删除）
+COLS_TO_DELETE = ["数据唯一编号", "备注2"]
 
 VALID_OP_GROUPS = [
     "HD-wellfor", "Lowes-wellfor", "HD-forclover", "Lowes-forclover",
@@ -27,6 +28,9 @@ WH_EXCLUDE = ["ROSA"]
 
 # OSA&NORA专用：收货地址排除关键词
 ADDR_EXCLUDE_KEYWORDS = ["lowe", "c/o"]
+
+# 需要统一格式的日期列
+DATE_COLS = ["下单日期", "截止发货日期"]
 # ==============================
 
 # 辅助函数：清洗文本，只保留字母数字并转大写
@@ -44,17 +48,39 @@ if uploaded_file:
         df_raw = pd.read_excel(uploaded_file, dtype=str)
         st.success(f"上传成功，原始数据共 {len(df_raw)} 条")
 
-        # 步骤2：删除指定列（所有Sheet共用的基础清洗）
+        # 步骤1：删除指定列（所有Sheet共用的基础清洗）
         exist_cols = [c for c in COLS_TO_DELETE if c in df_raw.columns]
         if exist_cols:
             df_base = df_raw.drop(columns=exist_cols)
+            st.info(f"已删除列：{exist_cols}")
         else:
             df_base = df_raw.copy()
+            st.warning("未找到指定删除的列，跳过")
+
+        # 步骤2：统一日期格式为 YYYY-MM-DD
+        for col in DATE_COLS:
+            if col in df_base.columns:
+                # 兼容各种日期格式，转换失败保留空值
+                date_series = pd.to_datetime(df_base[col], errors='coerce')
+                df_base[col] = date_series.dt.strftime('%Y-%m-%d')
+                failed_count = int(date_series.isna().sum())
+                st.info(f"已统一「{col}」格式为 YYYY-MM-DD，转换失败 {failed_count} 条")
+            else:
+                st.warning(f"未找到「{col}」列，跳过日期格式统一")
+
+        # 步骤3：QTY列转为数值格式
+        if "QTY" in df_base.columns:
+            # 转数值，转换失败设为空值
+            df_base["QTY"] = pd.to_numeric(df_base["QTY"], errors='coerce')
+            qty_failed = int(df_base["QTY"].isna().sum())
+            st.info(f"已将「QTY」列转为数值格式，转换失败 {qty_failed} 条")
+        else:
+            st.warning("未找到「QTY」列，跳过数值转换")
 
         # ========== 总订单、快递、LTL 专用过滤链 ==========
         df_op_filtered = df_base.copy()
         
-        # 1. 运营组筛选
+        # 运营组筛选
         if "运营组" in df_op_filtered.columns:
             df_op_filtered["运营组"] = df_op_filtered["运营组"].astype(str).str.strip()
             valid_op_mask = df_op_filtered["运营组"].isin(VALID_OP_GROUPS)
@@ -65,7 +91,7 @@ if uploaded_file:
 
         df_total = df_op_filtered.copy()
 
-        # 2. 无效Email筛选
+        # 无效Email筛选
         if "Email" in df_total.columns:
             df_total["Email"] = df_total["Email"].astype(str).str.strip()
             invalid_email = (df_total["Email"].isna()) | (df_total["Email"] == "") | (df_total["Email"].str.upper() == "N/A")
@@ -74,10 +100,9 @@ if uploaded_file:
         else:
             st.warning("未找到「Email」列，跳过Email筛选")
 
-        # ========== 提前计算OSA&NORA地址清理数量，和上方统计排在一起 ==========
+        # ========== 提前计算OSA&NORA地址清理数量 ==========
         osa_addr_removed = 0
         if "仓库编号" in df_base.columns and "ShiptoAddress" in df_base.columns:
-            # 先按仓库筛选出OSA&NORA范围
             wh_clean_all = df_base["仓库编号"].apply(clean_text)
             keep_mask_all = pd.Series(False, index=df_base.index)
             for kw in WH_INCLUDE:
@@ -88,12 +113,10 @@ if uploaded_file:
             wh_final_mask = keep_mask_all & ~remove_mask_all
             df_osa_wh_only = df_base[wh_final_mask]
             
-            # 再统计地址含关键词的数量
             addr_clean = df_osa_wh_only["ShiptoAddress"].astype(str).str.replace(r'\s+', '', regex=True).str.lower()
             addr_invalid = addr_clean.str.contains('|'.join(ADDR_EXCLUDE_KEYWORDS), na=False)
             osa_addr_removed = int(addr_invalid.sum())
         
-        # 统一显示在上方统计区
         st.info(f"OSA&NORA：已清理收货地址含LOWE/C/O的订单 {osa_addr_removed} 条")
 
         # 生成Excel文件到内存
@@ -109,14 +132,14 @@ if uploaded_file:
             # Sheet1：总订单
             df_total.to_excel(writer, sheet_name="总订单", index=False)
 
-            # Sheet2：ZC-Fedex&UPS（基于总订单）
+            # Sheet2：ZC-Fedex&UPS
             if "快递类型" in df_total.columns:
                 express_col = df_total["快递类型"].astype(str).str.strip().str.lower()
                 exp_mask = express_col.str.contains("|".join(EXPRESS_KEYWORDS), case=False, na=False)
                 df_exp = df_total[exp_mask].reset_index(drop=True)
                 df_exp.to_excel(writer, sheet_name="ZC-Fedex&UPS", index=False)
 
-                # Sheet3：ZC-LTL（基于总订单）
+                # Sheet3：ZC-LTL
                 pickup_mask = express_col.str.contains(SELF_PICKUP_KEYWORD, case=False, na=False)
                 ltl_mask = ~(exp_mask | pickup_mask)
                 df_ltl = df_total[ltl_mask].reset_index(drop=True)
@@ -126,7 +149,6 @@ if uploaded_file:
 
             # Sheet4：OSA&NORA
             if "仓库编号" in df_base.columns:
-                # 复用前面已筛选好的仓库数据，再删除地址异常订单
                 if "ShiptoAddress" in df_osa_wh_only.columns:
                     addr_clean = df_osa_wh_only["ShiptoAddress"].astype(str).str.replace(r'\s+', '', regex=True).str.lower()
                     addr_invalid = addr_clean.str.contains('|'.join(ADDR_EXCLUDE_KEYWORDS), na=False)
@@ -156,7 +178,7 @@ if uploaded_file:
         col3.metric("LTL", len(df_ltl))
         col4.metric("OSA&NORA", len(df_osa))
 
-        # 调试面板：仓库编号匹配详情
+        # 调试面板
         if "仓库编号" in df_base.columns:
             with st.expander("🔍 仓库编号匹配调试（点击展开）", expanded=False):
                 st.caption("统计范围：已删除指定列，未过滤运营组、Email、地址")
