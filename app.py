@@ -67,14 +67,13 @@ if uploaded_file:
             else:
                 st.warning(f"未找到「{col}」列，跳过日期格式统一")
 
-        # 步骤3：QTY 重命名为「订购数量」并转为数值格式
-        if "QTY" in df_base.columns:
-            df_base = df_base.rename(columns={"QTY": "订购数量"})
+        # 步骤3：订购数量列转为数值格式
+        if "订购数量" in df_base.columns:
             df_base["订购数量"] = pd.to_numeric(df_base["订购数量"], errors='coerce')
             qty_failed = int(df_base["订购数量"].isna().sum())
-            st.info(f"已将「QTY」重命名为「订购数量」并转为数值格式，转换失败 {qty_failed} 条")
+            st.info(f"已将「订购数量」列转为数值格式，转换失败 {qty_failed} 条")
         else:
-            st.warning("未找到「QTY」列，跳过重命名与数值转换")
+            st.warning("未找到「订购数量」列，跳过数值转换")
 
         # ========== 总订单、快递、LTL 专用过滤链 ==========
         df_op_filtered = df_base.copy()
