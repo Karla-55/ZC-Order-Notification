@@ -75,26 +75,28 @@ if uploaded_file:
         else:
             st.warning("未找到「订购数量」列，跳过数值转换")
 
-        # ========== 总订单、快递、LTL 专用过滤链 ==========
-        df_op_filtered = df_base.copy()
+        # ========== 总订单：不筛选运营组、不筛选Email ==========
+        df_total = df_base.copy()
+        st.info("总订单：不筛选运营组、不筛选Email，保留全部基础数据")
+
+        # ========== 快递/LTL专用：执行运营组+Email过滤 ==========
+        df_for_express = df_base.copy()
         
         # 运营组筛选
-        if "运营组" in df_op_filtered.columns:
-            df_op_filtered["运营组"] = df_op_filtered["运营组"].astype(str).str.strip()
-            valid_op_mask = df_op_filtered["运营组"].isin(VALID_OP_GROUPS)
-            df_op_filtered = df_op_filtered[valid_op_mask].reset_index(drop=True)
-            st.info(f"总订单/快递/LTL：已清理非指定运营组订单 {(~valid_op_mask).sum()} 条")
+        if "运营组" in df_for_express.columns:
+            df_for_express["运营组"] = df_for_express["运营组"].astype(str).str.strip()
+            valid_op_mask = df_for_express["运营组"].isin(VALID_OP_GROUPS)
+            df_for_express = df_for_express[valid_op_mask].reset_index(drop=True)
+            st.info(f"快递/LTL：已清理非指定运营组订单 {(~valid_op_mask).sum()} 条")
         else:
             st.warning("未找到「运营组」列，跳过运营组筛选")
 
-        df_total = df_op_filtered.copy()
-
         # 无效Email筛选
-        if "Email" in df_total.columns:
-            df_total["Email"] = df_total["Email"].astype(str).str.strip()
-            invalid_email = (df_total["Email"].isna()) | (df_total["Email"] == "") | (df_total["Email"].str.upper() == "N/A")
-            df_total = df_total[~invalid_email].reset_index(drop=True)
-            st.info(f"总订单/快递/LTL：已清理无效Email订单 {invalid_email.sum()} 条")
+        if "Email" in df_for_express.columns:
+            df_for_express["Email"] = df_for_express["Email"].astype(str).str.strip()
+            invalid_email = (df_for_express["Email"].isna()) | (df_for_express["Email"] == "") | (df_for_express["Email"].str.upper() == "N/A")
+            df_for_express = df_for_express[~invalid_email].reset_index(drop=True)
+            st.info(f"快递/LTL：已清理无效Email订单 {invalid_email.sum()} 条")
         else:
             st.warning("未找到「Email」列，跳过Email筛选")
 
@@ -127,20 +129,20 @@ if uploaded_file:
         df_osa = pd.DataFrame()
 
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            # Sheet1：总订单
+            # Sheet1：总订单（不筛选运营组、不筛选Email）
             df_total.to_excel(writer, sheet_name="总订单", index=False)
 
-            # Sheet2：ZC-Fedex&UPS
-            if "快递类型" in df_total.columns:
-                express_col = df_total["快递类型"].astype(str).str.strip().str.lower()
+            # Sheet2：ZC-Fedex&UPS（基于过滤后的快递/LTL数据集）
+            if "快递类型" in df_for_express.columns:
+                express_col = df_for_express["快递类型"].astype(str).str.strip().str.lower()
                 exp_mask = express_col.str.contains("|".join(EXPRESS_KEYWORDS), case=False, na=False)
-                df_exp = df_total[exp_mask].reset_index(drop=True)
+                df_exp = df_for_express[exp_mask].reset_index(drop=True)
                 df_exp.to_excel(writer, sheet_name="ZC-Fedex&UPS", index=False)
 
-                # Sheet3：ZC-LTL
+                # Sheet3：ZC-LTL（基于过滤后的快递/LTL数据集）
                 pickup_mask = express_col.str.contains(SELF_PICKUP_KEYWORD, case=False, na=False)
                 ltl_mask = ~(exp_mask | pickup_mask)
-                df_ltl = df_total[ltl_mask].reset_index(drop=True)
+                df_ltl = df_for_express[ltl_mask].reset_index(drop=True)
                 df_ltl.to_excel(writer, sheet_name="ZC-LTL", index=False)
             else:
                 st.warning("未找到「快递类型」列，跳过快递分类筛选")
