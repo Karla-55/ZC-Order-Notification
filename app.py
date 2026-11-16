@@ -60,7 +60,6 @@ if uploaded_file:
         # 步骤2：统一日期格式为 YYYY-MM-DD
         for col in DATE_COLS:
             if col in df_base.columns:
-                # 兼容各种日期格式，转换失败保留空值
                 date_series = pd.to_datetime(df_base[col], errors='coerce')
                 df_base[col] = date_series.dt.strftime('%Y-%m-%d')
                 failed_count = int(date_series.isna().sum())
@@ -68,14 +67,14 @@ if uploaded_file:
             else:
                 st.warning(f"未找到「{col}」列，跳过日期格式统一")
 
-        # 步骤3：QTY列转为数值格式
+        # 步骤3：QTY 重命名为「订购数量」并转为数值格式
         if "QTY" in df_base.columns:
-            # 转数值，转换失败设为空值
-            df_base["QTY"] = pd.to_numeric(df_base["QTY"], errors='coerce')
-            qty_failed = int(df_base["QTY"].isna().sum())
-            st.info(f"已将「QTY」列转为数值格式，转换失败 {qty_failed} 条")
+            df_base = df_base.rename(columns={"QTY": "订购数量"})
+            df_base["订购数量"] = pd.to_numeric(df_base["订购数量"], errors='coerce')
+            qty_failed = int(df_base["订购数量"].isna().sum())
+            st.info(f"已将「QTY」重命名为「订购数量」并转为数值格式，转换失败 {qty_failed} 条")
         else:
-            st.warning("未找到「QTY」列，跳过数值转换")
+            st.warning("未找到「QTY」列，跳过重命名与数值转换")
 
         # ========== 总订单、快递、LTL 专用过滤链 ==========
         df_op_filtered = df_base.copy()
