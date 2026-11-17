@@ -18,9 +18,10 @@ VALID_OP_GROUPS = [
     "Shopify-wellfor", "Shopify-forclover"
 ]
 
-# 快递关键词
+# 快递关键词（仅在不包含LTL的前提下匹配）
 EXPRESS_KEYWORDS = ["fedex", "ups"]
 SELF_PICKUP_KEYWORD = "客户自提"
+LTL_KEYWORD = "ltl"
 
 # 仓库关键词
 WH_INCLUDE = ["NORA", "OSA"]
@@ -132,17 +133,23 @@ if uploaded_file:
             # Sheet1：总订单（不筛选运营组、不筛选Email）
             df_total.to_excel(writer, sheet_name="总订单", index=False)
 
-            # Sheet2：ZC-Fedex&UPS（基于过滤后的快递/LTL数据集）
+            # Sheet2 & Sheet3：快递与LTL拆分（LTL优先级最高）
             if "快递类型" in df_for_express.columns:
                 express_col = df_for_express["快递类型"].astype(str).str.strip().str.lower()
-                exp_mask = express_col.str.contains("|".join(EXPRESS_KEYWORDS), case=False, na=False)
+                
+                # 优先级1：包含LTL字样，直接归LTL
+                ltl_keyword_mask = express_col.str.contains(LTL_KEYWORD, case=False, na=False)
+                # 优先级2：不包含LTL的前提下，匹配Fedex/UPS
+                exp_mask = ~ltl_keyword_mask & express_col.str.contains("|".join(EXPRESS_KEYWORDS), case=False, na=False)
+                # 客户自提
+                pickup_mask = express_col.str.contains(SELF_PICKUP_KEYWORD, case=False, na=False)
+                # 最终LTL：包含LTL关键词 或 （非快递 且 非自提）
+                ltl_final_mask = ltl_keyword_mask | (~exp_mask & ~pickup_mask)
+
                 df_exp = df_for_express[exp_mask].reset_index(drop=True)
                 df_exp.to_excel(writer, sheet_name="ZC-Fedex&UPS", index=False)
 
-                # Sheet3：ZC-LTL（基于过滤后的快递/LTL数据集）
-                pickup_mask = express_col.str.contains(SELF_PICKUP_KEYWORD, case=False, na=False)
-                ltl_mask = ~(exp_mask | pickup_mask)
-                df_ltl = df_for_express[ltl_mask].reset_index(drop=True)
+                df_ltl = df_for_express[ltl_final_mask].reset_index(drop=True)
                 df_ltl.to_excel(writer, sheet_name="ZC-LTL", index=False)
             else:
                 st.warning("未找到「快递类型」列，跳过快递分类筛选")
