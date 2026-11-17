@@ -27,8 +27,10 @@ LTL_KEYWORD = "ltl"
 WH_INCLUDE = ["NORA", "OSA"]
 WH_EXCLUDE = ["ROSA"]
 
-# OSA&NORA专用：收货地址排除关键词
-ADDR_EXCLUDE_KEYWORDS = ["lowe", "c/o"]
+# OSA&NORA专用：收货信息排除关键词（名称+地址任意一列命中即删除）
+OSA_ADDR_EXCLUDE_KEYWORDS = ["lowe's of", "c/o thd ship to store"]
+# 需要检查的列
+OSA_CHECK_COLS = ["ShipToName", "ShiptoAddress"]
 
 # 需要统一格式的日期列
 DATE_COLS = ["下单日期", "截止发货日期"]
@@ -103,7 +105,8 @@ if uploaded_file:
 
         # ========== 提前计算OSA&NORA地址清理数量 ==========
         osa_addr_removed = 0
-        if "仓库编号" in df_base.columns and "ShiptoAddress" in df_base.columns:
+        if "仓库编号" in df_base.columns:
+            # 先按仓库筛选出OSA&NORA范围
             wh_clean_all = df_base["仓库编号"].apply(clean_text)
             keep_mask_all = pd.Series(False, index=df_base.index)
             for kw in WH_INCLUDE:
@@ -112,13 +115,18 @@ if uploaded_file:
             for kw in WH_EXCLUDE:
                 remove_mask_all = remove_mask_all | wh_clean_all.str.contains(kw, na=False)
             wh_final_mask = keep_mask_all & ~remove_mask_all
-            df_osa_wh_only = df_base[wh_final_mask]
-            
-            addr_clean = df_osa_wh_only["ShiptoAddress"].astype(str).str.replace(r'\s+', '', regex=True).str.lower()
-            addr_invalid = addr_clean.str.contains('|'.join(ADDR_EXCLUDE_KEYWORDS), na=False)
-            osa_addr_removed = int(addr_invalid.sum())
+            df_osa_wh_only = df_base[wh_final_mask].reset_index(drop=True)
+
+            # 检查ShipToName和ShiptoAddress两列，任意一列命中即删除
+            invalid_mask = pd.Series(False, index=df_osa_wh_only.index)
+            for col in OSA_CHECK_COLS:
+                if col in df_osa_wh_only.columns:
+                    col_clean = df_osa_wh_only[col].astype(str).str.strip().str.lower()
+                    for kw in OSA_ADDR_EXCLUDE_KEYWORDS:
+                        invalid_mask = invalid_mask | col_clean.str.contains(kw, na=False)
+            osa_addr_removed = int(invalid_mask.sum())
         
-        st.info(f"OSA&NORA：已清理收货地址含LOWE/C/O的订单 {osa_addr_removed} 条")
+        st.info(f"OSA&NORA：已清理收货信息含指定关键词的订单 {osa_addr_removed} 条")
 
         # 生成Excel文件到内存
         output = BytesIO()
@@ -156,13 +164,8 @@ if uploaded_file:
 
             # Sheet4：OSA&NORA
             if "仓库编号" in df_base.columns:
-                if "ShiptoAddress" in df_osa_wh_only.columns:
-                    addr_clean = df_osa_wh_only["ShiptoAddress"].astype(str).str.replace(r'\s+', '', regex=True).str.lower()
-                    addr_invalid = addr_clean.str.contains('|'.join(ADDR_EXCLUDE_KEYWORDS), na=False)
-                    df_osa = df_osa_wh_only[~addr_invalid].reset_index(drop=True)
-                else:
-                    df_osa = df_osa_wh_only.copy()
-
+                # 复用前面已筛选好的仓库数据，再删除收货信息异常订单
+                df_osa = df_osa_wh_only[~invalid_mask].reset_index(drop=True)
                 df_osa.to_excel(writer, sheet_name="OSA&NORA", index=False)
             else:
                 st.warning("未找到「仓库编号」列，跳过仓库筛选")
